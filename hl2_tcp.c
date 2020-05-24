@@ -1,12 +1,14 @@
 //
 //  hl2_tcp.c
-//   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
+//
+#define VERSION "v.1.3.114a1" // alpha 2020-05-23 0
+//   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
+//   Pi :    cc -lm -lpthread -Os -o htest hl2_tcp.c hl2_tx.c
 //
 //  Serves IQ data using the rtl_tcp protocol
 //    from an Hermes Lite 2 on port 1024
 //    to iPv6 port 1234
 //
-#define VERSION "v.1.3.111" // alpha 2020-05-18
 //   initial version 2020-01-27  rhn 
 //
 //   Copyright 2017,2020 Ronald H Nicholson Jr. All Rights Reserved.
@@ -14,7 +16,10 @@
 //   the Mozilla Public License 2.0 plus Exhibit B (no copyleft exception)
 //   See: https://www.mozilla.org/en-US/MPL/2.0/
 
-// #define TX_OK
+#define TX_OK
+
+#ifdef __clang__
+#endif
 
 #define TITLE ("hl2_tcp ")
 #define SOCKET_READ_TIMEOUT_SEC ( 10.0 * 60.0 )
@@ -70,9 +75,9 @@ int     discover_main();
 int     hl2_udp_Loop(int flag);
 void    hl2_stop();
 void 	print_hl2_stats() ;
-
-void 	tx_setup();
-void 	tx_cleanup();
+ 
+extern void 	tx_setup();
+extern void 	tx_cleanup();
 
 uint32_t ipAddr 		=  0x7f000001; 	// 127.0.0.1 == localhost
 int hl2_running 		=  0;		// Metis response
@@ -83,11 +88,20 @@ int hermes_tx_drive_level       =  0;		// 0 .. 15
 int hermes_enable_power_amp	=  0;           // 
 int hermes_Q5_switch_ext_ptt_lp =  0;
 volatile int hl2_tx_on          =  0;
-
 volatile int tx_key_down        =  0;
+int last_key_down   		=  0;
 
+// Rx and Tx filters; default no HPF ?
 int 	n2adr_filter_rx 	=  0;             
 int 	n2adr_filter_tx		=  0;
+
+//int  specialCommandCounter 	=  5;
+//int     newMACLastByte   	=  0xDE; 	// yyy yyy
+
+int   specialCommandCounter	=  0;
+int 	bias0 			=  0; 	//  109;
+int 	bias1 			=  0; 	//  118;
+int     newMACLastByte   	=  0; 	//  
 
 int         sendErrorFlag       =  0;
 int         sampleBits          =  SAMPLE_BITS;
@@ -100,7 +114,6 @@ int         gClientSocketID     = -1;
 char	    *ring_buffer_ptr    =  NULL;
 int	    decimateFlag	=  1;
 int	    decimateCntr	=  0;
-int	    filterFlag	        =  0;
 
 volatile float gain0            =  GAIN8;
 
@@ -114,6 +127,7 @@ int	    sendblockcount      =  0;
 int 	    threads_running     =  0;
 
 char 	*radio_ipaddr 		=  "127.0.0.1";   // 0x7f000001 == localhost
+
 
 char UsageString1[]
     = "Usage: hl2_tcp -a hermes_IPaddr [-p local_port] [-b 8/16]";
@@ -136,7 +150,7 @@ int main(int argc, char *argv[])
     int portno     =  TCP_PORT;     //
     int n;
 
-    if (argc > 2) {
+    if (argc > 1) {
         if (strcmp(argv[1], "-d")==0) {
                 int e = discover_main();
                 return(e);
@@ -180,8 +194,8 @@ int main(int argc, char *argv[])
     printf("Converts to rtl_tcp format %d-bit IQ samples \n", sampleBits);
     printf("Starting hl2_tcp server on TCP port %d\n", portno);
 
-    tx_setup() ; // setup mmap file to key waveform
-
+    tx_setup();
+    
     sigact.sa_handler = sighandler;
     sigemptyset(&sigact.sa_mask);
     sigact.sa_flags = 0;
@@ -252,6 +266,7 @@ int main(int argc, char *argv[])
 
     udp_running  = -1;
     hl2_stop();
+    tx_cleanup();
 
     fflush(stdout);
     return 0;
@@ -268,8 +283,9 @@ static void sighandler(int signum)
         }
         udp_running  = -1;
         hl2_stop();
-    exit(-1);
-        do_exit = 1;
+        tx_cleanup();
+        exit(-1);
+        // do_exit = 1;
 }
 
 int stop_send_thread = 0;
@@ -375,6 +391,9 @@ int tcp_send_poll()
         if (ring_data_available() >= (sz0 + pad)) {
             int sz = ring_read(tmpBuf, sz0, 0);
 	    if (sz > 0) {
+                if (totalSamples == 0) {
+		   fprintf(stderr, "HL2 UDP data received %d\n", k);
+		}
 #ifdef __APPLE__
                 k = send(send_sockfd, tmpBuf, sz, 0);
 #else
@@ -382,7 +401,7 @@ int tcp_send_poll()
 #endif
                 if (k <= 0) { sendErrorFlag = -1; }
                 if (totalSamples == 0) {
-		   fprintf(stderr, "tcp server working %d\n", k);
+		   fprintf(stderr, "tcp data stream started %d\n", k);
 		}
                 totalSamples   +=  sz;
                 sendblockcount +=  1;
@@ -429,10 +448,10 @@ void *tcp_connection_handler()
     if ( pthread_create( &tcp_send_thread, NULL ,
                              start_hl2_udp_loop,
                              (void *)param) < 0) {
-            printf("could not create tcp send thread");
+            printf("could not create tcp streaming thread");
             return(NULL);
     } else {
-            printf("send thread started 1 \n");
+            printf("tcp streaming thread started \n");
     }
 
     acc_r         =  0.0;
@@ -569,18 +588,10 @@ float rand_float_co()
 //
 //
 
-#ifdef TX_OK
-#include "hl2_tx.c"
-#else
-int bias0 			=  0;
-int bias1 			=  0;
-void tx_setup() {    return; }
-void tx_cleanup() { return; }
-int get_tx_key() { return(0); }
-int get_tx_drive() { return(0); }
-void tx_block_setup() { return; }
-void get_tx_sample(int *tx_i, int *tx_q) { return; }
-#endif
+extern int get_tx_key(void) ;
+extern void tx_block_setup();
+extern void get_tx_sample(int *tx_i, int *tx_q) ;
+extern int get_tx_drive(void) ;
 
 #define FILTER_HPF          (0x40)
 #define FILTER_160	    (0x01)
@@ -592,10 +603,12 @@ void get_tx_sample(int *tx_i, int *tx_q) { return; }
 
 struct sockaddr_in 	recv_Addr;
 socklen_t addrLen   	=  sizeof(recv_Addr);
-unsigned char opccBuf[1500];	// Original Protocol Command & Control
+unsigned char opccBuf[1600];	// Original Protocol Command & Control
 int seqNum 	    	=  0;
 #ifdef DEBUG_FILE
 char *dump_fname        =  DEBUG_FILE ;
+#else
+char *dump_fname        =  NULL;
 #endif
 
 //
@@ -618,7 +631,7 @@ float hermes_pa_current   =  0;
 
 int hwCmdState          =  0;
 int hwCmdSeqNum		=  0;
-int hwCmd[8]		=  { 0 , 0 };   // 1+4 fpga command bytes
+unsigned char hwCmd[8]	=  { 0 , 0 };   // 1+4 fpga command bytes
 
 void *start_hl2_udp_loop(void *param)
 {
@@ -653,16 +666,26 @@ int handleRcvData(unsigned char *hl2Buf, int n)
 		   || (buf[11 - 1] != 0x7F));
     int seqNum0 =  (buf[4] << 24) | (buf[5] << 16) | (buf[6] << 8) | (buf[7]);
 
-    int replyBit = (buf[11] & 0x80) ;
-    if (replyBit) {
-    	int cmdEcho = (buf[11] & 0x7F) >> 1;
+    for (jj=0; jj<1024; jj+=512) {
+        int replyBit = (buf[jj+11] & 0x80) ;
         int dt = seqNum0 - hwCmdSeqNum;
-        fprintf(stdout,"******** hw cmd ack %02x %d \n",cmdEcho,dt);
-	if (cmdEcho ==  hwCmd[0]) {
-	    hwCmdState  =  0;
-	    // command acknowledged ?
-	    hwCmdSeqNum	=  seqNum0;
-	}
+        if (replyBit) {
+	    int i;
+    	    int cmdEcho = (buf[jj+11] & 0x7F) >> 1;
+            printf("******** # %d hw cmd ack 0x%02x : ", dt, cmdEcho);
+	    for (i=0;i<5;i++) { printf("0x%02x ", buf[jj+11+i]); }
+	    printf("\n");
+	    if (1 || (cmdEcho ==  hwCmd[0])) {
+	        hwCmdState  =  0;
+	        // command acknowledged ?
+	        specialCommandCounter -= 1;
+	        // hwCmdSeqNum	=  seqNum0;
+	    }
+  	    if (buf[jj+11] == 0xff) {
+  	        hwCmdState  = -1;
+                fprintf(stdout,"******** hw cmd error \n", cmdEcho, dt);
+  	    }
+        }
     }
 
     int dtype0 =  buf[11    ] >> 3;
@@ -784,12 +807,11 @@ void dump_iq_buf(unsigned char *buf)
     fprintf(stdout,"\n");
     int seq0 = buf[4] << 24 | buf[5] << 16 | buf[6] << 8 | buf[7];
     printf("seq = %d \n", seq0);
-   
+
     double samp_msq = 0.0;	// magnitude squared
     double samp_rms = 0.0;
     double scale = 32768.0 * 32768.0 * 2.0; // 33 bit shift
 
-#ifdef DEBUG_FILE
     if (dump_fname == NULL) { return; }
     FILE *f = fopen(dump_fname,"w");
     if (f == NULL) { return; }
@@ -805,6 +827,7 @@ void dump_iq_buf(unsigned char *buf)
 	            fprintf(f,"%02x ",c);
 	        }
 	    fprintf(f,"\n");
+
     int j;
     int xr, xi ;
     double v, u;
@@ -829,7 +852,6 @@ void dump_iq_buf(unsigned char *buf)
 	samp_msq += u*u + v*v;
     }
     fclose(f);
-#endif
 
     int nSamples = (2 * (512-8))/4;  // == 1008/4 == 252
     samp_rms = sqrt(samp_msq / nSamples) / scale;
@@ -889,43 +911,99 @@ void configStartCmd(char* buf, int flag)
 
 int C0_addr = 0;       // 
 
-int specialCommandCounter = 2;
-
-void checkForSpecialCommands()
+void checkForSpecialCommands() 	// for special commands
 {
     
-    if (specialCommandCounter == 0) { return; }
+    if (specialCommandCounter <= 0) { return; }
+    if (seqNum > hwCmdSeqNum + 1000) {
+	    hwCmdState = 0;
+	    printf("retry command \n");
+    }
+    if (hwCmdState < 0) { 
+        if (seqNum > hwCmdSeqNum + 1600) {
+    	    // error retry ?
+	    hwCmdState = 0;
+	    printf("retry command \n");
+	} else {
+	    return;	// wait
+	}
+    }
     if (hwCmdState != 0) { return; }
-    if (seqNum < 153) { return; }
+    if (seqNum < 800) { return; }
 
-    if (specialCommandCounter == 2) { 
+    // default MAC =   00:1c:c0:a2:13:dd
+    // to set 0xEF of MAC U:V:W:X:Y:0xEF, 
+    //   the 32-bit word should be 0x06acd0EF.
+    if (specialCommandCounter == 5) {
+        if (newMACLastByte != 0) { 
+            hwCmd[0] = 0x3D; // Address ? 0x3D or 0x7D to read
+            hwCmd[1] = 0x06; // write cookie = 0x06 , read = 0x07
+            hwCmd[2] = 0xAC; // chip address + stop ?
+            hwCmd[3] = 0xC0; // MCP4662 cmd to write at addr C ? 
+            hwCmd[4] = (unsigned char)(0x013);
+            hwCmdState = 3;
+	    printf("******** setting MAC Addr Y to 0x%02x \n", hwCmd[4]);
+        } else {
+	    specialCommandCounter -= 1;
+        }
+    }
+    if (specialCommandCounter == 4) {
+        if (newMACLastByte != 0) { 
+            hwCmd[0] = 0x3D; // Address ? 0x3D or 0x7D to read
+            hwCmd[1] = 0x06; // write cookie = 0x06 
+            hwCmd[2] = 0xAC; // chip address + stop ?
+            hwCmd[3] = 0xD0; // MCP4662 cmd to write at addr D ? 
+            hwCmd[4] = (unsigned char)(newMACLastByte & 0x0ff);
+            hwCmdState = 3;
+	    printf("******** setting MAC Addr Z to 0x%02x \n", hwCmd[4]);
+        } else {
+	    specialCommandCounter -= 1;
+        }
+    }
+    if (specialCommandCounter == 3) {
+        if (newMACLastByte != 0) { 
+            hwCmd[0] = 0x3D; // Address ? 0x3D or 0x7D
+            hwCmd[1] = 0x06; // write cookie = 0x06 
+            hwCmd[2] = 0xAC; // chip address + stop ?
+            hwCmd[3] = 0x60; // MCP4662 cmd to write at addr 6 ? 
+            hwCmd[4] = 0x60; // enable MAC byte + DHCP
+            hwCmdState = 3;
+	    printf("******** setting MAC enable to 0x%02x \n", hwCmd[4]);
+      } else {
+	    specialCommandCounter -= 1;
+      }
+    }
+
+    if (specialCommandCounter == 2 ) {
+      if (bias0 > 0) { 
 	// if C0_addr  =  6;
         hwCmd[0] = 0x3D; // Address ?
         hwCmd[1] = 0x06; // write cookie = 0x06 
         hwCmd[2] = 0xAC; // chip address + stop ?
         hwCmd[3] = 0x00; // MCP4662 cmd to write at addr 0 ? 
+		// 0x20; //   addr 1 = non-volatile bias0
         hwCmd[4] = (unsigned char)bias0 ;
         hwCmdState = 3;
-        specialCommandCounter -= 1;
 	fprintf(stdout,"******** sending bias0 command \n");
+      } else {
+	    specialCommandCounter -= 1;
+      }
     }
-    if (specialCommandCounter == 1) { 
+    if (specialCommandCounter == 1) {
+      if (bias1 > 0) { 
 	// if C0_addr  =  6;
         hwCmd[0] = 0x3D; // Address ?
         hwCmd[1] = 0x06; // write cookie = 0x06 
         hwCmd[2] = 0xAC; // chip address + stop ?
         hwCmd[3] = 0x10; // MCP4662 cmd to write at addr 1 ? 
+		// 0x30; //   addr 3 = non-volative bias1
         hwCmd[4] = (unsigned char)bias1;
         hwCmdState = 3;
-        specialCommandCounter -= 1;
 	fprintf(stdout,"******** sending bias1 command \n");
+      } else {
+	    specialCommandCounter -= 1;
+      }
     }
-	/*
-    configSendUDP_packet(opccBuf);
-    b = sendto( hl2_fd, &opccBuf[0], msgLen, 0, 
-	            (struct sockaddr *)&serverAddr, addrLen);
-	*/
-
 }
 
 void configSendUDP_packet(unsigned char *opccBuf)
@@ -958,7 +1036,7 @@ void configSendUDP_packet(unsigned char *opccBuf)
     } else {
 	hermes_tx_drive_level =  0; 	
     }
-    
+
     opccBuf[ 11] = (C0_addr + 0) << 1 | hl2_tx_on;    	// 
     for (i=0;i<4;i++) { opccBuf[ 12+i] = 0; }
     opccBuf[523] = (C0_addr + 1) << 1 | hl2_tx_on; 	//
@@ -1045,7 +1123,7 @@ void configSendUDP_packet(unsigned char *opccBuf)
 	//
 	checkForSpecialCommands();
 	if ((hwCmdState == 3) || (hwCmdState == 7)) {
-	    opccBuf[523] = (hwCmd[0] << 1) | hl2_tx_on; 	// 7
+	    opccBuf[523] = (hwCmd[0] << 1) | hl2_tx_on | 0x80; 	// 7
 	    for (i=1;i<=4;i++) {
               opccBuf[523+i] = hwCmd[i];  // 4 fpga command bytes
 	    }
@@ -1190,6 +1268,7 @@ int hl2_fd  = -1;
 
 int hl2_udp_Loop(int loopFlag)
 {
+    // uint32_t ipAddr 	=  0x7f000001; 	// 127.0.0.1 == localhost
     int		port 	=  HERMES_PORT;
     int 	fd	=  -1;
     
@@ -1198,13 +1277,14 @@ int hl2_udp_Loop(int loopFlag)
 	if (s) {
 	    ipAddr = getDecimalValueOfIPV4_String(s);
 	    printf("hl2 ip addr: %s = 0x%lx\n", s, (long int)ipAddr);
+	} else {
+	  exit(-1);
 	}
-	else { return(-1); }
     }
 
     if ( (fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
         perror("socket failed");
-        return(-1);
+        return -1;
     }
     hl2_fd = fd;
 
@@ -1212,6 +1292,7 @@ int hl2_udp_Loop(int loopFlag)
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons( HERMES_PORT );              
     // serverAddr.sin_addr.s_addr = htonl( 0x7f000001 );  // 127.0.0.1
+    serverAddr.sin_addr.s_addr = htonl( ipAddr );  
     // 
     char myMsg[1500];
     for ( int i = 0; i < 4; i++ ) {
@@ -1309,8 +1390,8 @@ void hl2_stop()
         print_hl2_stats() ;
         seqNum = 0;
         fprintf(stdout, "hl2 UDP stream stopped \n");
+        // tx_cleanup();
     }
-    tx_cleanup();
 }
 
 //
@@ -1501,7 +1582,7 @@ void run_discover()
 #ifdef SET_IP
 	    usleep(50000);
 	    usleep(50000);
-        set_ip(rx_discover_socket);
+        // set_ip(rx_discover_socket);
 	    usleep(50000);
 	    usleep(50000);
 #endif
@@ -1513,9 +1594,9 @@ void print_hl2_stats()
         float tf = (tc * 9.0 / 5.0) + 32.0;
         printf("temp = %5.1f C = %5.1f F\n", tc, tf);
         printf("rms db = %lf \n", samp_db);
-	printf("hermes_fwd_power:  %f \n", hermes_fwd_power ); 
-	printf("hermes_rev_power:  %f \n", hermes_rev_power ); 
-	printf("hermes_pa_current:  %f \n", hermes_pa_current); 
+  	printf("hermes_fwd_power:  %f \n", hermes_fwd_power ); 
+  	printf("hermes_rev_power:  %f \n", hermes_rev_power ); 
+  	printf("hermes_pa_current:  %f \n", hermes_pa_current); 
         printf("seqNum = %d \n", seqNum);
 }
 
