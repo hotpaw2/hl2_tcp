@@ -1,9 +1,8 @@
 //
 //  hl2_tcp.c
 //
-#define VERSION "v.1.3.114a1" // alpha 2020-05-23 0
+#define VERSION "v.1.3.114(b2)" // alpha 2020-05-23 0
 //   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
-//   Pi :    cc -lm -lpthread -Os -o htest hl2_tcp.c hl2_tx.c
 //
 //  Serves IQ data using the rtl_tcp protocol
 //    from an Hermes Lite 2 on port 1024
@@ -25,7 +24,7 @@
 #define SOCKET_READ_TIMEOUT_SEC ( 10.0 * 60.0 )
 #define SAMPLE_BITS     ( 8)    // default to match rtl_tcp
 // #define SAMPLE_BITS  (16)    // default to match rsp_tcp
-// #define SAMPLE_BITS  (32)    // Hermes capable of 24-bit->float32 IQ data
+// #define SAMPLE_BITS  (32)    // HPSDR 24-bit->float32 IQ data ?
 #define GAIN8           (4096.0)    // default gain ?
 #define TCP_PORT        (1234)      // default rtp_tcp server port
 #define HERMES_PORT 	(1024)	    // UDP port
@@ -96,12 +95,12 @@ int 	n2adr_filter_rx 	=  0;
 int 	n2adr_filter_tx		=  0;
 
 //int  specialCommandCounter 	=  5;
-//int     newMACLastByte   	=  0xDE; 	// yyy yyy
+//int     newMACLastByte   	=  0xDE; 	// testing value
 
 int   specialCommandCounter	=  0;
 int 	bias0 			=  0; 	//  109;
 int 	bias1 			=  0; 	//  118;
-int     newMACLastByte   	=  0; 	//  
+int     newMACLastByte   	=  0; 	//  0xDE
 
 int         sendErrorFlag       =  0;
 int         sampleBits          =  SAMPLE_BITS;
@@ -127,7 +126,6 @@ int	    sendblockcount      =  0;
 int 	    threads_running     =  0;
 
 char 	*radio_ipaddr 		=  "127.0.0.1";   // 0x7f000001 == localhost
-
 
 char UsageString1[]
     = "Usage: hl2_tcp -a hermes_IPaddr [-p local_port] [-b 8/16]";
@@ -510,6 +508,7 @@ void *tcp_connection_handler()
                 }
                 if (msg == 2) {    // set sample rate
                     int r = data;
+		    /// ToDo: add support for 96ksps
 		    if ((r == 48000) || (r == 192000) || (r == 384000)) {
                       // if (r != previousSRate) {
                         sampRate = r;
@@ -525,8 +524,7 @@ void *tcp_connection_handler()
                 if (msg == 4) {            // gain
                     if (   (sampleBits ==  8)
                         || (sampleBits == 16) ) {
-                        // set gain ?
-			//
+                        // set gain 
 			// hermes_lna_gain : LNA gain -12 to +48 dB
 			//
                         float g1 = data; // data : in 10th dB's
@@ -736,8 +734,10 @@ int handleRcvData(unsigned char *hl2Buf, int n)
 	      kk += 2;
 	      k  += 4;
 	    } else {
+	      // magnitude for testing
 	      samp_m2 += u*u + v*v;
-                float vv = g8 * scale_r * v;
+                // scale and add triangular noise shaping
+		float vv = g8 * scale_r * v;
                 float rnd1v = rand_float_co(); 
                 float rv = rnd1v - rnd0v;
                 vv = vv + rv;
@@ -751,6 +751,7 @@ int handleRcvData(unsigned char *hl2Buf, int n)
                 float ruu = roundf(uu);
                 int ui  = (int)ruu;
 		rnd0u = rnd1u;
+	      // convert to unsigned 8-bit samples
 	      uv[k]   = vi + 128;
 	      uv[k+1] = ui + 128;
 	      k += 2;
@@ -1129,7 +1130,6 @@ void configSendUDP_packet(unsigned char *opccBuf)
 	    }
 	    hwCmdState  = hwCmdState & 0x0e;	// clear LSB (2,6)
 	    hwCmdSeqNum	=  seqNum;
-	    // yyy yyy
 	}
     }
     if (C0_addr ==  8) {
@@ -1390,17 +1390,16 @@ void hl2_stop()
         print_hl2_stats() ;
         seqNum = 0;
         fprintf(stdout, "hl2 UDP stream stopped \n");
-        // tx_cleanup();
     }
 }
 
 //
 //
 
-// hermes_discover.c
+// hermes_discovery.c
 // 2020-02-04 2019-12-23  rhn  2017-jun-xx  
 //
-#define D_VERSION ("0.2.104")
+#define D_VERSION ("0.2.114")
 
 #define DISCOVER
 // #define SET_IP
@@ -1439,8 +1438,6 @@ int rx_discover_socket  = -1;
 int sockfd 	    	= -1;
 int rx_udp_socket   	=  INVALID_SOCKET; 	// -1
 // int seqNum 	    	=  0;
-// int hermes_rx_freq  	=  14110000;
-// int hermes_lna_gain 	=  19;		// LNA gain -12 to +48 dB
 
 int total 		=  0;
 
@@ -1450,15 +1447,15 @@ struct sockaddr_in 	hermes_Addr;
 struct sockaddr_in 	recv_Addr;
 // socklen_t addrLen   	=  sizeof(recv_Addr);
 
-void run_discover();
+void do_discovery();
 
 // int main(int argc, char **argv)
 int discover_main()
 {
-    printf("Hermes Lite 2 UDP Discover Test v.%s\n", D_VERSION);
+    printf("Hermes Lite 2 UDP IP Address Discovery v.%s\n", D_VERSION);
 
 #ifdef DISCOVER
-    run_discover();
+    do_discovery();
 #endif 
 
     printf("Done.\n");
@@ -1468,7 +1465,7 @@ int discover_main()
 //
 //
 
-void set_ip(int rx_discover_socket)
+void set_ip(int rx_discover_socket)	// untested
 {
     unsigned char data[64];
     int i,n=0;
@@ -1490,6 +1487,7 @@ void set_ip(int rx_discover_socket)
     data[7] = 0x13;
     data[8] = 0xdd;
     
+    /// ToDo: replace with desired fixed IP
     data[ 9] = 0x7f;	// 127.0.0.1
     data[10] = 0x00;
     data[11] = 0x00;
@@ -1510,9 +1508,9 @@ void set_ip(int rx_discover_socket)
                            (const struct sockaddr *)&bcast_Addr,
 			   sizeof(bcast_Addr));
             }
-            // printf("bcast %d %d\n", i, n); n++;
-            // if (i == 63) { break; }
-            // if (n == 5) { break; }
+            // printf("bcast %d %d\n", i, n); 
+	    n++;
+            if (n >= 255) { break; }
             usleep(50000);
             p = p->ifa_next;
         }
@@ -1521,9 +1519,9 @@ void set_ip(int rx_discover_socket)
     sleep(1);
 }
 
-void send_discover(int rx_discover_socket);
+void broadcast_discover(int rx_discover_socket);
 
-void run_discover()
+void do_discovery()
 {
     short int	port 	=  HERMES_PORT;
     int 	i,b;
@@ -1535,7 +1533,8 @@ void run_discover()
 			(char *)&i, sizeof(i));
 	fl = fcntl(rx_discover_socket, F_GETFL);
 	fcntl(rx_discover_socket, F_SETFL, fl | O_NONBLOCK);
-	send_discover(rx_discover_socket);
+
+	broadcast_discover(rx_discover_socket);
 
 	usleep(50000);
 	usleep(50000);
@@ -1544,15 +1543,12 @@ void run_discover()
 	if (b > 0) {
             uint32_t ipAddr;
 	    strncpy(ip_string, inet_ntoa(recv_Addr.sin_addr), ADR_SIZE);
-	    // printf("discover ip = %s \n", ip_string);
 	    printf("discover ip = %s : ", ip_string);
             ipAddr = *(uint32_t *)&recv_Addr.sin_addr;
             printf("0x%08X \n", ntohl(ipAddr));
 	    int p = ntohs(recv_Addr.sin_port);
 	    printf("discover port = %d \n", p);
-	    // printf("Got %d bytes from broadcast discover \n", b);
 	}
-	// printf("addrlen = %d \n", addrLen);
 	if (b >= 60) {
 	    int j;
 	    printf("Received %d bytes from UDP broadcast discover \n", b);
@@ -1581,9 +1577,7 @@ void run_discover()
 	}
 #ifdef SET_IP
 	    usleep(50000);
-	    usleep(50000);
-        // set_ip(rx_discover_socket);
-	    usleep(50000);
+        	// set_ip(rx_discover_socket);
 	    usleep(50000);
 #endif
 }
@@ -1601,10 +1595,10 @@ void print_hl2_stats()
 }
 
 //
-// send_discoverer
+// broadcast_discoverer
 //
 
-void send_discover(int rx_discover_socket)
+void broadcast_discover(int rx_discover_socket)
 {
     unsigned char data[64];
     int i, n = 0;
@@ -1629,15 +1623,15 @@ void send_discover(int rx_discover_socket)
                 i = sendto(rx_discover_socket, (char *)data, 63, 0, 
 		  (const struct sockaddr *)&bcast_Addr, sizeof(bcast_Addr));
             }
-	    // printf("bcast %d %d\n", i, n); n++;
-	    // if (i == 63) { break; }
-	    // if (n == 5) { break; }
+	    // printf("bcast %d %d\n", i, n); 
+	    n++;
+	    if (n > 255) { break; }
 	    usleep(50000);
             p = p->ifa_next;
         }
         freeifaddrs(ifap);
     }
-    printf("UDP broadcast number %d %d\n", i, n); n++;
+    printf("%d UDP broadcasts of %d bytes\n", n, i);
 }
 
 //   Copyright 2017,2020 Ronald H Nicholson Jr. All Rights Reserved.
