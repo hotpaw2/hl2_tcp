@@ -35,6 +35,24 @@ and
 _SDR Receiver_,
 allowing HL2 SDR reception an iPhone, iPad, or Mac.
 
+Usage:
+
+    hl2_tcp -d
+
+Discovers Hermes Lite 2 IP Address.
+Prints random diagnostics.
+
+    hl2_tcp -a Hermes_IP_Addr [-p tcp_server_port] [-b 8/16]
+
+Starts a server for the rtl_tcp protocol
+    on a local TCP server port (default rtl_tcp port 1234)
+    and waits for a TCP connection.
+Upon opening an rcp_tcp TCP connection,
+    starts a UDP connection to the Hermes Lite 2
+    at Hermes_IP_Addr on UDP port 1024,
+    and transcodes OpenHPSDR/Metis UDP data to rtl_tcp TCP data.
+    Also prints more random diagnostics.
+
 
 More information on the Hermes Lite 2 can be found on this web sites:
  [Hermes-Lite2 wiki](https://github.com/softerhardware/Hermes-Lite2/wiki)

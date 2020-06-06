@@ -1,8 +1,9 @@
 //
 //  hl2_tcp.c
 //
-#define VERSION "v.1.3.114(b2)" // alpha 2020-05-23 0
-//   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
+#define VERSION "v.1.3.116" // 2020-06-06 01
+//   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
+//   pi    :    cc -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
 //
 //  Serves IQ data using the rtl_tcp protocol
 //    from an Hermes Lite 2 on port 1024
@@ -15,7 +16,8 @@
 //   the Mozilla Public License 2.0 plus Exhibit B (no copyleft exception)
 //   See: https://www.mozilla.org/en-US/MPL/2.0/
 
-#define TX_OK
+// #define TX_OK
+// #define SPECIAL_CMD_OK
 
 #ifdef __clang__
 #endif
@@ -74,14 +76,14 @@ int     discover_main();
 int     hl2_udp_Loop(int flag);
 void    hl2_stop();
 void 	print_hl2_stats() ;
+void    setFilterEnables() ;
  
-extern void 	tx_setup();
-extern void 	tx_cleanup();
-
 uint32_t ipAddr 		=  0x7f000001; 	// 127.0.0.1 == localhost
 int hl2_running 		=  0;		// Metis response
 int udp_running   		=  0;		// udp socket live
+int C0_addr 			=  0;       	// 
 volatile int hermes_rx_freq  	=  14100000;	// 100k to 30M
+volatile int hermes_tx_freq  	=  0;		// 
 volatile int hermes_lna_gain 	=  19;		// LNA gain -12 to +48 dB
 int hermes_tx_drive_level       =  0;		// 0 .. 15
 int hermes_enable_power_amp	=  0;           // 
@@ -93,14 +95,6 @@ int last_key_down   		=  0;
 // Rx and Tx filters; default no HPF ?
 int 	n2adr_filter_rx 	=  0;             
 int 	n2adr_filter_tx		=  0;
-
-//int  specialCommandCounter 	=  5;
-//int     newMACLastByte   	=  0xDE; 	// testing value
-
-int   specialCommandCounter	=  0;
-int 	bias0 			=  0; 	//  109;
-int 	bias1 			=  0; 	//  118;
-int     newMACLastByte   	=  0; 	//  0xDE
 
 int         sendErrorFlag       =  0;
 int         sampleBits          =  SAMPLE_BITS;
@@ -126,6 +120,30 @@ int	    sendblockcount      =  0;
 int 	    threads_running     =  0;
 
 char 	*radio_ipaddr 		=  "127.0.0.1";   // 0x7f000001 == localhost
+
+#ifdef TX_OK
+extern void 	tx_setup();
+extern void 	tx_cleanup();
+extern int 	get_tx_key(void) ;
+extern void 	tx_block_setup();
+extern void 	get_tx_sample(int *tx_i, int *tx_q) ;
+extern int 	get_tx_drive(void) ;
+#else
+void 		tx_setup() { return; }
+void 		tx_cleanup() { return; }
+extern int 	get_tx_key(void) { return(0); }
+extern void 	tx_block_setup() { return; }
+extern void 	get_tx_sample(int *tx_i, int *tx_q) { return; }
+extern int 	get_tx_drive(void) { return(0); }
+#endif
+
+#ifdef SPECIAL_CMD_OK
+extern int  	specialCommandCounter;
+extern void 	checkForSpecialCommands(); 	// for special commands
+#else
+int     	specialCommandCounter	=  0;
+void   	 	checkForSpecialCommands() { return; }
+#endif
 
 char UsageString1[]
     = "Usage: hl2_tcp -a hermes_IPaddr [-p local_port] [-b 8/16]";
@@ -503,6 +521,7 @@ void *tcp_connection_handler()
                     int f0 = data;
 		    if (f0 >= 100000 && f0 <= 30000000) {
 		        hermes_rx_freq 	=  f0;  //  hl2
+			setFilterEnables();
 		    }
                     fprintf(stdout, "setting frequency to: %d\n", f0);
                 }
@@ -586,11 +605,6 @@ float rand_float_co()
 //
 //
 
-extern int get_tx_key(void) ;
-extern void tx_block_setup();
-extern void get_tx_sample(int *tx_i, int *tx_q) ;
-extern int get_tx_drive(void) ;
-
 #define FILTER_HPF          (0x40)
 #define FILTER_160	    (0x01)
 #define FILTER_80           (0x02)
@@ -629,7 +643,7 @@ float hermes_pa_current   =  0;
 
 int hwCmdState          =  0;
 int hwCmdSeqNum		=  0;
-unsigned char hwCmd[8]	=  { 0 , 0 };   // 1+4 fpga command bytes
+unsigned char hwCmd[8]	=  { 0,0,0,0,0 };   // 1+4 fpga command bytes
 
 void *start_hl2_udp_loop(void *param)
 {
@@ -681,7 +695,7 @@ int handleRcvData(unsigned char *hl2Buf, int n)
 	    }
   	    if (buf[jj+11] == 0xff) {
   	        hwCmdState  = -1;
-                fprintf(stdout,"******** hw cmd error \n", cmdEcho, dt);
+                fprintf(stdout,"******** hw cmd error \n" );
   	    }
         }
     }
@@ -910,100 +924,25 @@ void configStartCmd(char* buf, int flag)
     bcopy(myData, buf, 64);
 }
 
-int C0_addr = 0;       // 
-
-void checkForSpecialCommands() 	// for special commands
+void setFilterEnables()	// open collector
 {
-    
-    if (specialCommandCounter <= 0) { return; }
-    if (seqNum > hwCmdSeqNum + 1000) {
-	    hwCmdState = 0;
-	    printf("retry command \n");
-    }
-    if (hwCmdState < 0) { 
-        if (seqNum > hwCmdSeqNum + 1600) {
-    	    // error retry ?
-	    hwCmdState = 0;
-	    printf("retry command \n");
-	} else {
-	    return;	// wait
-	}
-    }
-    if (hwCmdState != 0) { return; }
-    if (seqNum < 800) { return; }
-
-    // default MAC =   00:1c:c0:a2:13:dd
-    // to set 0xEF of MAC U:V:W:X:Y:0xEF, 
-    //   the 32-bit word should be 0x06acd0EF.
-    if (specialCommandCounter == 5) {
-        if (newMACLastByte != 0) { 
-            hwCmd[0] = 0x3D; // Address ? 0x3D or 0x7D to read
-            hwCmd[1] = 0x06; // write cookie = 0x06 , read = 0x07
-            hwCmd[2] = 0xAC; // chip address + stop ?
-            hwCmd[3] = 0xC0; // MCP4662 cmd to write at addr C ? 
-            hwCmd[4] = (unsigned char)(0x013);
-            hwCmdState = 3;
-	    printf("******** setting MAC Addr Y to 0x%02x \n", hwCmd[4]);
-        } else {
-	    specialCommandCounter -= 1;
-        }
-    }
-    if (specialCommandCounter == 4) {
-        if (newMACLastByte != 0) { 
-            hwCmd[0] = 0x3D; // Address ? 0x3D or 0x7D to read
-            hwCmd[1] = 0x06; // write cookie = 0x06 
-            hwCmd[2] = 0xAC; // chip address + stop ?
-            hwCmd[3] = 0xD0; // MCP4662 cmd to write at addr D ? 
-            hwCmd[4] = (unsigned char)(newMACLastByte & 0x0ff);
-            hwCmdState = 3;
-	    printf("******** setting MAC Addr Z to 0x%02x \n", hwCmd[4]);
-        } else {
-	    specialCommandCounter -= 1;
-        }
-    }
-    if (specialCommandCounter == 3) {
-        if (newMACLastByte != 0) { 
-            hwCmd[0] = 0x3D; // Address ? 0x3D or 0x7D
-            hwCmd[1] = 0x06; // write cookie = 0x06 
-            hwCmd[2] = 0xAC; // chip address + stop ?
-            hwCmd[3] = 0x60; // MCP4662 cmd to write at addr 6 ? 
-            hwCmd[4] = 0x60; // enable MAC byte + DHCP
-            hwCmdState = 3;
-	    printf("******** setting MAC enable to 0x%02x \n", hwCmd[4]);
-      } else {
-	    specialCommandCounter -= 1;
-      }
+    n2adr_filter_rx     =  0;
+    if (hermes_rx_freq <  3000000) {
+        n2adr_filter_rx =  FILTER_HPF;
     }
 
-    if (specialCommandCounter == 2 ) {
-      if (bias0 > 0) { 
-	// if C0_addr  =  6;
-        hwCmd[0] = 0x3D; // Address ?
-        hwCmd[1] = 0x06; // write cookie = 0x06 
-        hwCmd[2] = 0xAC; // chip address + stop ?
-        hwCmd[3] = 0x00; // MCP4662 cmd to write at addr 0 ? 
-		// 0x20; //   addr 1 = non-volatile bias0
-        hwCmd[4] = (unsigned char)bias0 ;
-        hwCmdState = 3;
-	fprintf(stdout,"******** sending bias0 command \n");
-      } else {
-	    specialCommandCounter -= 1;
-      }
+    n2adr_filter_tx     =  FILTER_160;
+    if (hermes_tx_freq >  3500000) {
+	n2adr_filter_tx =  FILTER_80;
     }
-    if (specialCommandCounter == 1) {
-      if (bias1 > 0) { 
-	// if C0_addr  =  6;
-        hwCmd[0] = 0x3D; // Address ?
-        hwCmd[1] = 0x06; // write cookie = 0x06 
-        hwCmd[2] = 0xAC; // chip address + stop ?
-        hwCmd[3] = 0x10; // MCP4662 cmd to write at addr 1 ? 
-		// 0x30; //   addr 3 = non-volative bias1
-        hwCmd[4] = (unsigned char)bias1;
-        hwCmdState = 3;
-	fprintf(stdout,"******** sending bias1 command \n");
-      } else {
-	    specialCommandCounter -= 1;
-      }
+    if (hermes_tx_freq >  7000000) {
+	n2adr_filter_tx =  FILTER_40;
+    }
+    if (hermes_tx_freq > 14000000) {
+	n2adr_filter_tx =  FILTER_30_20;
+    }
+    if (hermes_tx_freq > 21000000) {
+	n2adr_filter_tx =  FILTER_10; 	// ToDo: bug
     }
 }
 
@@ -1031,33 +970,21 @@ void configSendUDP_packet(unsigned char *opccBuf)
     opccBuf[522] =  0x7F;
     
     tx_key_down =  get_tx_key();
-    hl2_tx_on   =  tx_key_down;
+    if (hermes_tx_freq 	<  1800000) { tx_key_down = 0; }
     if (tx_key_down) {
 	hermes_tx_drive_level =  get_tx_drive();  	//  lvl 0..15 
     } else {
 	hermes_tx_drive_level =  0; 	
     }
+    hl2_tx_on   =  tx_key_down;
 
     opccBuf[ 11] = (C0_addr + 0) << 1 | hl2_tx_on;    	// 
     for (i=0;i<4;i++) { opccBuf[ 12+i] = 0; }
     opccBuf[523] = (C0_addr + 1) << 1 | hl2_tx_on; 	//
     for (i=0;i<4;i++) { opccBuf[524+i] = 0; }
 
-    int hermes_tx_freq = hermes_rx_freq ;
-    n2adr_filter_tx = FILTER_160;
-    n2adr_filter_rx = FILTER_HPF;
-    if (hermes_tx_freq >  3500000) {
-	n2adr_filter_tx = FILTER_80;
-    }
-    if (hermes_tx_freq >  7000000) {
-	n2adr_filter_tx = FILTER_40;
-    }
-    if (hermes_tx_freq > 14000000) {
-	n2adr_filter_tx = FILTER_30_20;
-    }
-    if (hermes_tx_freq > 21000000) {
-	n2adr_filter_tx = FILTER_10; 	// ToDo: bug
-    }
+    hermes_tx_freq = hermes_rx_freq ;  /// ToDo: add tx offset for split
+    // setFilterEnables();
 
     if (C0_addr == 0) {
         opccBuf[11] = C0_addr << 1 | hl2_tx_on;    // 0
@@ -1122,7 +1049,7 @@ void configSendUDP_packet(unsigned char *opccBuf)
         opccBuf[ 11] = C0_addr << 1 | hl2_tx_on;    	// 6
         opccBuf[523] = (C0_addr + 1) << 1 | hl2_tx_on; 	// 7
 	//
-	checkForSpecialCommands();
+	checkForSpecialCommands(); // sets hwCmdState
 	if ((hwCmdState == 3) || (hwCmdState == 7)) {
 	    opccBuf[523] = (hwCmd[0] << 1) | hl2_tx_on | 0x80; 	// 7
 	    for (i=1;i<=4;i++) {
@@ -1130,6 +1057,8 @@ void configSendUDP_packet(unsigned char *opccBuf)
 	    }
 	    hwCmdState  = hwCmdState & 0x0e;	// clear LSB (2,6)
 	    hwCmdSeqNum	=  seqNum;
+	} else {
+	    // opccBuff 524..527 are already zero'd
 	}
     }
     if (C0_addr ==  8) {
@@ -1402,7 +1331,6 @@ void hl2_stop()
 #define D_VERSION ("0.2.114")
 
 #define DISCOVER
-// #define SET_IP
 #define USE_FD
 #define ECHO_WAIT 	(1)
 
@@ -1463,61 +1391,6 @@ int discover_main()
 } 
 
 //
-//
-
-void set_ip(int rx_discover_socket)	// untested
-{
-    unsigned char data[64];
-    int i,n=0;
-    int port = 1024;
-    static struct sockaddr_in bcast_Addr;
-    
-    struct ifaddrs * ifap, * p;
-    
-    data[0] = 0xEF;
-    data[1] = 0xFE;
-    data[2] = 0x03;
-    
-    // 00 1c c0 a2 13 dd
-    
-    data[3] = 0x00;
-    data[4] = 0x1c;
-    data[5] = 0xc0;
-    data[6] = 0xa2;
-    data[7] = 0x13;
-    data[8] = 0xdd;
-    
-    /// ToDo: replace with desired fixed IP
-    data[ 9] = 0x7f;	// 127.0.0.1
-    data[10] = 0x00;
-    data[11] = 0x00;
-    data[12] = 0x01;
-    
-    for (i = 13; i < 63; i++) { data[i] = 0; }
-    
-    memset(&bcast_Addr, 0, sizeof(bcast_Addr));
-    bcast_Addr.sin_family = AF_INET;
-    bcast_Addr.sin_port = htons(port);
-    if (getifaddrs(&ifap) == 0) {
-        p = ifap;
-        while(p) {
-            if ((p->ifa_addr) && p->ifa_addr->sa_family == AF_INET) {
-                bcast_Addr.sin_addr
-                = ((struct sockaddr_in *)(p->ifa_broadaddr))->sin_addr;
-                i = sendto(rx_discover_socket, (char *)data, 63, 0,
-                           (const struct sockaddr *)&bcast_Addr,
-			   sizeof(bcast_Addr));
-            }
-            // printf("bcast %d %d\n", i, n); 
-	    n++;
-            if (n >= 255) { break; }
-            usleep(50000);
-            p = p->ifa_next;
-        }
-        freeifaddrs(ifap);
-    }
-    sleep(1);
-}
 
 void broadcast_discover(int rx_discover_socket);
 
@@ -1575,11 +1448,7 @@ void do_discovery()
 	} else {
 	    exit(-1);
 	}
-#ifdef SET_IP
-	    usleep(50000);
-        	// set_ip(rx_discover_socket);
-	    usleep(50000);
-#endif
+	// is set_ip(rx_discover_socket) needed ???
 }
 
 void print_hl2_stats() 
