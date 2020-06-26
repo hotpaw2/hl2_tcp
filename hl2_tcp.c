@@ -1,7 +1,7 @@
 //
 //  hl2_tcp.c
 //
-#define VERSION "v.1.3.119" // 2020-06-19 02
+#define VERSION "v.1.3.121" // 2020-06-26 01
 //   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
 //   pi    :    cc -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
 //
@@ -16,8 +16,8 @@
 //   the Mozilla Public License 2.0 plus Exhibit B (no copyleft exception)
 //   See: https://www.mozilla.org/en-US/MPL/2.0/
 
-#define TX_OK
-#define SPECIAL_CMD_OK
+// #define TX_OK
+// #define SPECIAL_CMD_OK
 
 #ifdef __clang__
 #endif
@@ -31,7 +31,9 @@
 #define TCP_PORT        (1234)      // default rtp_tcp server port
 #define HERMES_PORT 	(1024)	    // UDP port
 
-#define RING_BUFFER_ALLOCATION  (2L * 8L * 1024L * 1024L)  // 16MB
+#define RING_BUFFER_ALLOCATION  (2L * 1024L * 1024L)  // 2MB
+#define NUMBER_OF_START_COMMANDS 	(8)
+#define START_LOOP_DELAY 		(50000)	 // microseconds
 
 #define _POSIX_C_SOURCE 200112L
 #include <stdio.h>
@@ -92,6 +94,7 @@ int hermes_Q5_switch_ext_ptt_lp =  0;
 int tx_gear_ratio		=  1;
 int tx_gear_counter		=  0;
 volatile int seqNum 	    	=  0;		// tx sequence number
+volatile long int tcp_tx_cmd	=  0;
 volatile int tx_key_down        =  0;		// Morse code key
 volatile int hl2_tx_on          =  0;		// tx ptt
 volatile int tx_delay           =  0;		// tx/ptt hold time
@@ -534,7 +537,7 @@ void *tcp_connection_handler()
                 }
 	        if (printCmdBytes) { printf("\n"); }
 
-                if (msg == 1) {    // set frequency
+                if (msg == 0x01) {    // set frequency
                     int f0 = data;
 		    if (f0 >= 100000 && f0 <= 30000000) {
 		        hermes_rx_freq 	=  f0;  //  hl2
@@ -542,8 +545,8 @@ void *tcp_connection_handler()
     			hermes_tx_offset =  get_tx_offset();
 		    }
                     fprintf(stdout, "setting frequency to: %d\n", f0);
-                }
-                if (msg == 2) {    // set sample rate
+                } else
+                if (msg == 0x02) {    // set sample rate
                     int r = data;
 		    if (   (r ==  48000) 
 		        || (r ==  96000) 
@@ -557,11 +560,11 @@ void *tcp_connection_handler()
 		    } else {
 		      // ignore
 		    }
-                }
-                if (msg == 3) {            // other
+                } else
+                if (msg == 0x03) {            // other
                     fprintf(stdout, "message = %d, data = %d\n", msg, data);
-                }
-                if (msg == 4) {            // gain
+                } else
+                if (msg == 0x04) {            // gain
                     if (   (sampleBits ==  8)
                         || (sampleBits == 16) ) {
                         // set gain 
@@ -581,8 +584,11 @@ void *tcp_connection_handler()
                             gain0 = GAIN8 *  8.0;
 			}
                     }
-                }
-                if (msg > 4) {            // other
+#ifdef TX_OK
+		} if (msg == 0x4d) {            // tx command extension 
+			tcp_tx_cmd = data;
+#endif
+                } else {            // other
                     fprintf(stdout, "message = %d, data = %d\n", msg, data);
 		    if (msg == 8) {
                         fprintf(stdout, "set agc mode ignored\n");
@@ -1183,6 +1189,9 @@ int hl2_rcv_loop(int fd, int mode)
 	                     (struct sockaddr *)&serverAddr, addrLen);
 	        if (bb > 0) { 
 	            udp_send_count += 1;
+		    if ((tcp_tx_cmd & 0x00ff) != 0) {
+		        tcp_tx_cmd -= 1;
+		    }
 	        } else {			// quit loop on error
 	    	    fprintf(stdout, "udp to hl2 send error \n");
 	                udp_running  = -2;
@@ -1263,7 +1272,9 @@ int hl2_udp_Loop(int loopFlag)
     serverAddr.sin_addr.s_addr = htonl( ipAddr );  
     // 
     char myMsg[1500];
-    for ( int i = 0; i < 4; i++ ) {
+
+    int n = NUMBER_OF_START_COMMANDS;
+    for ( int i = 0; i < n; i++ ) {
 
 	int flag = 0x01;		// send start command to HL2
 	configStartCmd(myMsg, flag);	// 	64 bytes
@@ -1278,7 +1289,7 @@ int hl2_udp_Loop(int loopFlag)
         if (i == 3) {
 	    printf( "Cmd %d sent, %d bytes of UDP\n", flag, msgLen);
 	}
-	usleep(50000);
+	usleep(START_LOOP_DELAY);
 #ifdef RESPONSE_WAIT
 	char ackvar[1500];
 	bzero(ackvar, 1500);
