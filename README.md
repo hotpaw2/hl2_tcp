@@ -7,7 +7,8 @@ SDR radio.
 The Hermes-Lite is a low-cost
 direct conversion 
 software defined amateur radio HF transceiver
-based on the AD9866 broadband modem chip
+based on the AD9866 broadband modem chip,
+an Altera Cyclone IV EP4CE22 FPGA,
 and the [HPSDR/Hermes SDR project](http://openhpsdr.org). 
 
 
@@ -25,11 +26,14 @@ to serve IQ samples from those USB devices over TCP.
 There are multiple SDR applications,
 available for Linux, macOS, or Wintel systems,
 that can connect to a local or remote SDR radio peripheral
-via the rtl_tcp protocol, as long as that software supports
-HL2 sample rates (48k, 192k, and 384k).
-This server allows using many of those SDR applications 
-with a Hermes Lite 2 SDR.
-Among those SDR applications are the iOS and macOS apps
+via the rtl_tcp protocol.
+This server allows using those SDR applications 
+with a Hermes Lite 2 SDR,
+but only if the application supports the
+HL2 sample rates (48k, 96k, 192k, and 384k).
+Among the SDR applications 
+supporting those sample rates
+are the iOS and macOS apps:
 _rtl_tcp SDR_
 and
 _SDR Receiver_,
