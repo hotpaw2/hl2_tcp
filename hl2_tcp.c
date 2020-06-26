@@ -1,7 +1,7 @@
 //
 //  hl2_tcp.c
 //
-#define VERSION "v.1.3.121" // 2020-06-26 01
+#define VERSION "v.1.3.122" // 2020-06-26 02
 //   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
 //   pi    :    cc -lm -lpthread -Os -o hl2_tcp hl2_tcp.c 
 //
@@ -956,7 +956,7 @@ void configStartCmd(char* buf, int flag)
 void setFilterEnables()	// open collector
 {
     n2adr_filter_rx     =  0;
-    if (hermes_rx_freq <  3000000) {
+    if (hermes_rx_freq >  3000000) {
         n2adr_filter_rx =  FILTER_HPF;
     }
 
