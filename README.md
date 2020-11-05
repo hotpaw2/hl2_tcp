@@ -57,6 +57,9 @@ Upon opening an rcp_tcp TCP connection,
     and transcodes OpenHPSDR/Metis UDP data to rtl_tcp TCP data.
     Also prints more random diagnostics.
 
+Important note: Under macOS Catalina 10.15.7 or later, or macOS Big Sur,
+this server may need to be installed and run from an Admin account,
+due to new macOS firewall security/privacy features.
 
 More information on the Hermes Lite 2 can be found on this web sites:
  [Hermes-Lite2 wiki](https://github.com/softerhardware/Hermes-Lite2/wiki)
