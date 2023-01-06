@@ -46,6 +46,10 @@ Usage:
 Discovers Hermes Lite 2 IP Address.
 Prints random diagnostics.
 
+    hl2_tcp -d xx.yy.zz.aa
+
+Discovers HL2 IP Address by scanning the subnet xx.yy.zz.*
+
     hl2_tcp -a Hermes_IP_Addr [-p tcp_server_port] [-b 8/16]
 
 Starts a server for the rtl_tcp protocol
@@ -56,6 +60,8 @@ Upon opening an rcp_tcp TCP connection,
     at Hermes_IP_Addr on UDP port 1024,
     and transcodes OpenHPSDR/Metis UDP data to rtl_tcp TCP data.
     Also prints more random diagnostics.
+
+Add custom rtl_tcp command 0x4D to control HL2 transmit capability.
 
 Important note: Under macOS Catalina 10.15.7 or later, or macOS Big Sur,
 this server may need to be installed and run from an Admin account,
