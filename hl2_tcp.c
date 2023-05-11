@@ -1,7 +1,7 @@
 //
 //  hl2_tcp.c
 //
-#define VERSION "v.1.4.105" // 2023-01-05  2021-04-11  
+#define VERSION "v.1.4.107" // 2023-04-20  2021-04-11  
 //   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
 //   pi    :    cc -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
 // 						(hl2_tx.c)
@@ -1246,10 +1246,16 @@ void configSendUDP_packet(unsigned char *opccBuf)
     }
     if (C0_addr == 10) {
         // C0_addr is 10, 11 (0x0a,0x0b)
-	int gTmp =  hermes_lna_gain;
-        if (hl2_tx_on != 0) { gTmp = -6; }
-        opccBuf[ 11] = (C0_addr << 1) | hl2_tx_on;            // 10
-        opccBuf[ 15] = ((gTmp + 12) & 0x3F) | 0x40;
+	int gTmp =  hermes_lna_gain + 12;
+        if (hl2_tx_on != 0) { 
+	    if (gTmp  >  12) {
+	        gTmp  =  12; 
+	    } else {
+	        gTmp  =   0; 
+	    }
+	}
+        opccBuf[ 11] = (C0_addr << 1) | hl2_tx_on;           // 10
+        opccBuf[ 15] = ((gTmp +  0) & 0x3F) | 0x40;
         opccBuf[523] = ((C0_addr + 1) << 1) | hl2_tx_on;     // 11
 
 	//
