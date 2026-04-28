@@ -1,7 +1,7 @@
 //
 //  hl2_tcp.c
 //
-#define VERSION "v.1.4.107" // 2023-04-20  2021-04-11  
+#define VERSION "v.1.4.108" // 2024-03-29  2021-04-11  
 //   macOS : clang -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
 //   pi    :    cc -lm -lpthread -Os -o hl2_tcp hl2_tcp.c hl2_tx.c
 // 						(hl2_tx.c)
@@ -1068,20 +1068,21 @@ void setFilterEnables()    // open collector
     if (hermes_rx_freq >  3000000) {
         n2adr_filter_rx =  FILTER_HPF;
     }
-    
-    n2adr_filter_tx     =  FILTER_160;
-    if (hermes_tx_freq >  3500000) {
-        n2adr_filter_tx =  FILTER_80;
-    }
-    if (hermes_tx_freq >  7000000) {
-        n2adr_filter_tx =  FILTER_40;
-    }
-    if (hermes_tx_freq > 14000000) {
+
+    // enabled by hl2_tx_on or tx_delay
+    if (       hermes_tx_freq >= 24800000) {    //  28.0 + 12M
+        n2adr_filter_tx =  FILTER_10;           
+    } else if (hermes_tx_freq >= 18000000) {    //  21.0 + 17M
+        n2adr_filter_tx =  FILTER_17_15;
+    } else if (hermes_tx_freq >= 10000000) {    //  14.0 + 30M
         n2adr_filter_tx =  FILTER_30_20;
-    }
-    if (hermes_tx_freq > 21000000) {
-        n2adr_filter_tx =  FILTER_10;     /// ToDo: bug
-    }
+    } else if (hermes_tx_freq >=  5300000) {    //   7.0 + 60M
+        n2adr_filter_tx =  FILTER_40;
+    } else if (hermes_tx_freq >=  3500000) {    //   3.5
+        n2adr_filter_tx =  FILTER_80;
+    } else {
+        n2adr_filter_tx =  FILTER_160;
+    }    
 }
 
 void configSendUDP_packet(unsigned char *opccBuf)
